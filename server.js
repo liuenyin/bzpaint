@@ -180,6 +180,10 @@ nextApp.prepare().then(() => {
 
             const result = await checkAndConsumeToken(connectedUser.id);
             if (!result || !result.success) {
+                if (result && result.error) {
+                    console.error("Token consumption error:", result.error);
+                    return;
+                }
                 socket.emit("limitExceeded", { remaining: result ? result.remaining : 0 });
                 return;
             }
@@ -190,6 +194,59 @@ nextApp.prepare().then(() => {
             const existingIndex = canvasBuffer.findIndex(p => p.position === updatedPixel.position);
             if (existingIndex >= 0) canvasBuffer[existingIndex] = { ...updatedPixel, author: connectedUser.id };
             else canvasBuffer.push({ ...updatedPixel, author: connectedUser.id });
+
+            if (canvasBuffer.length >= databaseRefreshRate) uploadCanvasBuffer();
+        });
+
+        socket.on("batchMessage", async (data) => {
+            const { pixels } = data;
+            if (!pixels || !Array.isArray(pixels) || pixels.length === 0) return;
+
+            // Validate all pixels
+            const validPixels = pixels.filter(p => p.position !== null && colorValidator(p.color));
+            if (validPixels.length === 0) return;
+
+            // Admin bypass
+            if (connectedUser.type === 'Admin') {
+                socket.emit("tokenUpdate", { tokens: 9999 });
+                validPixels.forEach(p => {
+                    const detailedPixel = { ...p, author: connectedUser.username || "Admin", timestamp: new Date() };
+                    io.emit("messageResponse", detailedPixel);
+
+                    const existingIndex = canvasBuffer.findIndex(ex => ex.position === p.position);
+                    if (existingIndex >= 0) canvasBuffer[existingIndex] = { ...p, author: connectedUser.id };
+                    else canvasBuffer.push({ ...p, author: connectedUser.id });
+                });
+                if (canvasBuffer.length >= databaseRefreshRate) uploadCanvasBuffer();
+                return;
+            }
+
+            // Consumption
+            const cost = validPixels.length;
+            const result = await checkAndConsumeToken(connectedUser.id, cost);
+
+            if (!result || !result.success) {
+                // If RPC fails with system error, log it and don't emit limitExceeded (avoid 0 jitter)
+                if (result && result.error) {
+                    console.error("Token consumption error:", result.error);
+                    socket.emit("error", { message: "System error during paint." });
+                    return;
+                }
+                // If RPC returns success: false but no system error, it means NOT ENOUGH TOKENS
+                socket.emit("limitExceeded", { remaining: result ? result.remaining : 0 });
+                return;
+            }
+
+            // Success: Broadcast & buffer all
+            socket.emit("tokenUpdate", { tokens: result.remaining });
+            validPixels.forEach(p => {
+                const detailedPixel = { ...p, author: connectedUser.username || "User", timestamp: new Date() };
+                io.emit("messageResponse", detailedPixel);
+
+                const existingIndex = canvasBuffer.findIndex(ex => ex.position === p.position);
+                if (existingIndex >= 0) canvasBuffer[existingIndex] = { ...p, author: connectedUser.id };
+                else canvasBuffer.push({ ...p, author: connectedUser.id });
+            });
 
             if (canvasBuffer.length >= databaseRefreshRate) uploadCanvasBuffer();
         });

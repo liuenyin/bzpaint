@@ -1,8 +1,5 @@
 const env = process.env.NODE_ENV;
-export const API_URL =
-  env === "development"
-    ? "http://localhost:4000/api"
-    : "/api";
+export const API_URL = "/api";
 
 export const SOCKET_URL =
   env === "development"
