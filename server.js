@@ -235,7 +235,7 @@ nextApp.prepare().then(() => {
         res.json({ message: data?.value || "Welcome!" });
     });
 
-    // Get Latest Snapshot (For future optimization or gallery)
+    // Get Latest Snapshot as PNG image
     app.get('/api/snapshot/latest', async (req, res) => {
         const { data, error } = await supabase
             .from('snapshots')
@@ -246,12 +246,60 @@ nextApp.prepare().then(() => {
 
         if (error || !data) return res.status(404).send('No snapshot');
 
-        // Send as image
+        // Supabase may return bytea as different formats depending on version
+        let buf;
+        if (Buffer.isBuffer(data.image_data)) {
+            buf = data.image_data;
+        } else if (data.image_data && data.image_data.type === 'Buffer' && Array.isArray(data.image_data.data)) {
+            // JSON serialized Buffer: { type: 'Buffer', data: [137, 80, 78, ...] }
+            buf = Buffer.from(data.image_data.data);
+        } else if (typeof data.image_data === 'string') {
+            // Hex string like '\\x89504e47...'
+            const hex = data.image_data.replace(/^\\x/, '');
+            buf = Buffer.from(hex, 'hex');
+        } else {
+            // Last resort: try direct conversion
+            buf = Buffer.from(data.image_data);
+        }
+
         res.setHeader('Content-Type', 'image/png');
-        // data.image_data is array of bytes or buffer?
-        // Supabase returns raw buffer for bytea usually? Or hex string?
-        // Safe bet: Buffer.from(data.image_data)
-        res.send(Buffer.from(data.image_data)); // Ensure buffer
+        res.setHeader('Cache-Control', 'no-cache');
+        res.send(buf);
+    });
+
+    // List all snapshots (simple gallery page)
+    app.get('/api/snapshot/list', async (req, res) => {
+        const { data, error } = await supabase
+            .from('snapshots')
+            .select('id, created_at')
+            .order('created_at', { ascending: false })
+            .limit(50);
+        if (error) return res.status(500).json({ error });
+        res.json(data);
+    });
+
+    // Get specific snapshot by ID
+    app.get('/api/snapshot/:id', async (req, res) => {
+        const { data, error } = await supabase
+            .from('snapshots')
+            .select('image_data')
+            .eq('id', req.params.id)
+            .single();
+        if (error || !data) return res.status(404).send('Not found');
+
+        let buf;
+        if (Buffer.isBuffer(data.image_data)) {
+            buf = data.image_data;
+        } else if (data.image_data && data.image_data.type === 'Buffer' && Array.isArray(data.image_data.data)) {
+            buf = Buffer.from(data.image_data.data);
+        } else if (typeof data.image_data === 'string') {
+            const hex = data.image_data.replace(/^\\x/, '');
+            buf = Buffer.from(hex, 'hex');
+        } else {
+            buf = Buffer.from(data.image_data);
+        }
+        res.setHeader('Content-Type', 'image/png');
+        res.send(buf);
     });
 
     // Next.js Handler (Fallthrough)

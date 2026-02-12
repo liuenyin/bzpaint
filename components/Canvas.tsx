@@ -13,7 +13,7 @@ import {
   Title
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
-import { IconZoomIn, IconZoomOut, IconZoomReset } from "@tabler/icons-react";
+import { IconZoomIn, IconZoomOut, IconZoomReset, IconBrush, IconHandStop } from "@tabler/icons-react";
 import ColorPalette from "./ColorPalette";
 import { socket } from "../common/socket";
 import { User, Pixel } from "../common/types";
@@ -45,6 +45,7 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
   const [drawing, setDrawing] = useState(false);
   const [visibleLoading, loadingOverlayHandler] = useDisclosure(true);
   const lastDrawTime = useRef(0); // Throttle: minimum ms between draws during drag
+  const [paintMode, setPaintMode] = useState(false); // Toggle for mobile left-click/tap drawing
 
   // Custom State
   const [userTokens, setUserTokens] = useState(userData?.tokens || 0);
@@ -200,7 +201,7 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
     // Throttle during drag: only allow 1 draw per 200ms to match server token rate
     if (isDrag) {
       const now = Date.now();
-      if (now - lastDrawTime.current < 200) return;
+      if (now - lastDrawTime.current < 50) return;
       lastDrawTime.current = now;
     }
 
@@ -317,6 +318,37 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
     socket.emit("resetCanvas");
   }
 
+  // Touch handler for mobile drawing
+  function handleTouchDraw(e: React.TouchEvent) {
+    if (!paintMode || !loggedIn) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const touch = e.touches[0];
+    if (!touch) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.floor((touch.clientX - rect.left) / scale);
+    const y = Math.floor((touch.clientY - rect.top) / scale);
+
+    if (x < 0 || x >= CANVAS_WIDTH || y < 0 || y >= CANVAS_HEIGHT) return;
+    if (!selectedPixelColor) return;
+
+    // Throttle touch moves
+    const now = Date.now();
+    if (e.type === 'touchmove' && now - lastDrawTime.current < 50) return;
+    lastDrawTime.current = now;
+
+    plotPixel(x, y, selectedPixelColor);
+    socket.emit("message", {
+      position: SERVER_STRIDE * y + x,
+      color: selectedPixelColor,
+    });
+    setUserTokens(prev => Math.max(0, prev - 1));
+  }
+
   const canvasElement = (
     <canvas
       height={CANVAS_HEIGHT}
@@ -331,11 +363,20 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
         }
       }}
       onMouseDown={(e) => {
+        // Right-click drag (desktop)
         if (e.button === 2) {
           e.preventDefault();
           e.stopPropagation();
           drawingRef.current = true;
           setDrawing(true);
+        }
+        // Left-click in paint mode (mobile/desktop)
+        if (e.button === 0 && paintMode) {
+          e.preventDefault();
+          e.stopPropagation();
+          drawingRef.current = true;
+          setDrawing(true);
+          handleDraw(e, false);
         }
       }}
       onMouseUp={(e) => {
@@ -349,9 +390,11 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        // Single right-click: draw one pixel
         handleDraw(e, false);
       }}
+      // Touch events for mobile
+      onTouchStart={(e) => handleTouchDraw(e)}
+      onTouchMove={(e) => handleTouchDraw(e)}
       className={styles.canva}
       ref={canvasRef}
     />
@@ -366,7 +409,7 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
       />
 
       {/* Token Bar */}
-      <TokenBar tokens={userTokens} maxTokens={20} />
+      <TokenBar tokens={userTokens} maxTokens={300} />
 
       <TransformWrapper
         initialScale={scale}
@@ -374,6 +417,8 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
         centerOnInit
         minScale={0.5}
         maxScale={20}
+        panning={{ disabled: paintMode }}
+        pinch={{ disabled: paintMode }}
       >
         {({ zoomIn, zoomOut, resetTransform, ...rest }) => (
           <Stack>
@@ -418,6 +463,21 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
                     />
                   </ActionIcon>
                 </Tooltip>
+                <Tooltip label={paintMode ? "切换为拖拽" : "切换为画笔"}>
+                  <ActionIcon
+                    onClick={() => setPaintMode(!paintMode)}
+                    variant={paintMode ? "filled" : "light"}
+                    aria-label="Toggle paint mode"
+                    color={paintMode ? "blue" : "gray"}
+                    size="lg"
+                  >
+                    {paintMode ? (
+                      <IconBrush style={{ width: "70%", height: "70%" }} stroke={2} />
+                    ) : (
+                      <IconHandStop style={{ width: "70%", height: "70%" }} stroke={2} />
+                    )}
+                  </ActionIcon>
+                </Tooltip>
               </Group>
               <ColorPalette updatePixelColor={updatePixelColor} />
             </Group>
@@ -451,8 +511,9 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
               canvasHeight={CANVAS_HEIGHT}
             />
             <Stack>
-              <Text size="sm">右键点击画布进行绘画。</Text>
-              <Text size="sm">使用智能辅助 (Smart Assist) 上传图片自动绘画。</Text>
+              <Text size="sm">桌面端：右键点击/拖拽画布绘画。</Text>
+              <Text size="sm">移动端：点击工具栏 🖌️ 按钮切换画笔模式，单击/滑动绘画。</Text>
+              <Text size="sm">使用智能辅助上传图片可自动绘画。</Text>
             </Stack>
           </Group>
         </Paper>

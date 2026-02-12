@@ -1,7 +1,7 @@
 const supabase = require("../db");
 
-const MAX_TOKENS = 20;
-const TOKEN_REGEN_RATE_MS = 5000;
+const MAX_TOKENS = 300;
+const TOKEN_REGEN_RATE_MS = 500;
 
 /**
  * Refills tokens based on time difference.

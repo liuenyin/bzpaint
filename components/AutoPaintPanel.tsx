@@ -16,7 +16,7 @@ export default function AutoPaintPanel({ socket, canvasData, canvasWidth, canvas
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
     const [isPainting, setIsPainting] = useState(false);
     const [progress, setProgress] = useState("");
-    const [paintSpeed, setPaintSpeed] = useState(200); // ms between draws
+    const [paintSpeed, setPaintSpeed] = useState(10); // ms between draws
 
     // Transformation State
     const [offsetX, setOffsetX] = useState(0);
