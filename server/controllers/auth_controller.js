@@ -120,7 +120,7 @@ exports.authenticate_user = [
         email: data.user.email,
         username: profile ? profile.username : "Unknown",
         type: isAdmin ? 'Admin' : 'Basic',
-        tokens: profile ? profile.tokens : 20
+        tokens: profile ? profile.tokens : 300
       };
 
       return res.status(200).json({ message: "Logged in" });

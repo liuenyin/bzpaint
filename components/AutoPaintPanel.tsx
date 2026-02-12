@@ -26,66 +26,66 @@ export default function AutoPaintPanel({ socket, canvasData, canvasWidth, canvas
     // Refs for values that change frequently — avoids stale closures
     const canvasDataRef = useRef(canvasData);
     const isPaintingRef = useRef(false);
-    const fileRef = useRef<File | null>(null);
     const offsetXRef = useRef(offsetX);
     const offsetYRef = useRef(offsetY);
     const scaleRef = useRef(scale);
     const intervalRef = useRef<NodeJS.Timeout | null>(null);
     const paintedCountRef = useRef(0);
 
+    // CACHED image analysis — only re-analyze when file or scale changes
+    const cachedImageRef = useRef<{ data: Uint8ClampedArray; width: number; height: number } | null>(null);
+    const cachedFileRef = useRef<File | null>(null);
+    const cachedScaleRef = useRef<number>(1);
+
     // Keep refs in sync with state
     useEffect(() => { canvasDataRef.current = canvasData; }, [canvasData]);
     useEffect(() => { offsetXRef.current = offsetX; }, [offsetX]);
     useEffect(() => { offsetYRef.current = offsetY; }, [offsetY]);
     useEffect(() => { scaleRef.current = scale; }, [scale]);
-    useEffect(() => { fileRef.current = file; }, [file]);
 
-    // Create an offscreen canvas to analyze the uploaded image
-    const analyzeImage = useCallback(async (f: File, s: number) => {
-        if (!f) return null;
-        const bmp = await createImageBitmap(f);
+    // Pre-analyze image when file or scale changes (NOT every tick!)
+    useEffect(() => {
+        if (!file) { cachedImageRef.current = null; return; }
+        const s = scale;
+        (async () => {
+            const bmp = await createImageBitmap(file);
+            const w = Math.floor(bmp.width * s);
+            const h = Math.floor(bmp.height * s);
+            if (w <= 0 || h <= 0) { cachedImageRef.current = null; return; }
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            ctx.drawImage(bmp, 0, 0, w, h);
+            cachedImageRef.current = { data: ctx.getImageData(0, 0, w, h).data, width: w, height: h };
+            cachedFileRef.current = file;
+            cachedScaleRef.current = s;
+        })();
+    }, [file, scale]);
 
-        const w = Math.floor(bmp.width * s);
-        const h = Math.floor(bmp.height * s);
-        if (w <= 0 || h <= 0) return null;
-
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return null;
-
-        ctx.drawImage(bmp, 0, 0, w, h);
-        return { data: ctx.getImageData(0, 0, w, h).data, width: w, height: h };
-    }, []);
-
-    // The core paint tick — reads from refs, not stale closures
-    const paintTick = useCallback(async () => {
+    // The core paint tick — uses cached image, no async overhead
+    const paintTick = useCallback(() => {
         if (!isPaintingRef.current) return;
-        const f = fileRef.current;
-        if (!f) return;
-
-        const SERVER_STRIDE = 1000;
-        const analysis = await analyzeImage(f, scaleRef.current);
+        const analysis = cachedImageRef.current;
         if (!analysis) return;
 
+        const SERVER_STRIDE = 1000;
         const { data: targetPixels, width: w, height: h } = analysis;
         const ox = offsetXRef.current;
         const oy = offsetYRef.current;
         const currentCanvas = canvasDataRef.current;
 
-        let found = false;
         for (let i = 0; i < w * h; i++) {
             const imgX = i % w;
             const imgY = Math.floor(i / w);
-
             const targetX = imgX + ox;
             const targetY = imgY + oy;
 
             if (targetX < 0 || targetX >= canvasWidth || targetY < 0 || targetY >= canvasHeight) continue;
 
             const idx = i * 4;
-            if (targetPixels[idx + 3] < 128) continue; // Skip transparency
+            if (targetPixels[idx + 3] < 128) continue;
 
             const r = targetPixels[idx];
             const g = targetPixels[idx + 1];
@@ -99,20 +99,25 @@ export default function AutoPaintPanel({ socket, canvasData, canvasWidth, canvas
             if (hex.toUpperCase() !== currentColor.toUpperCase()) {
                 socket.emit("message", { position: pos, color: hex });
                 paintedCountRef.current++;
-                found = true;
-                break; // One pixel per tick
+                return; // One pixel per tick
             }
         }
 
-        if (!found && isPaintingRef.current) {
+        // If we got here, no diff found = done
+        if (isPaintingRef.current) {
+            isPaintingRef.current = false;
+            setIsPainting(false);
+            if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+                intervalRef.current = null;
+            }
             setProgress(`✅ 绘制完成！共绘制 ${paintedCountRef.current} 个像素`);
         }
-    }, [analyzeImage, socket, canvasWidth, canvasHeight]);
+    }, [socket, canvasWidth, canvasHeight]);
 
     // Start / Stop painting
     function togglePainting() {
         if (isPainting) {
-            // Stop
             isPaintingRef.current = false;
             setIsPainting(false);
             if (intervalRef.current) {
@@ -121,17 +126,12 @@ export default function AutoPaintPanel({ socket, canvasData, canvasWidth, canvas
             }
             setProgress(`⏹ 已停止。共绘制 ${paintedCountRef.current} 个像素`);
         } else {
-            // Start
-            if (!file) return;
+            if (!file || !cachedImageRef.current) return;
             isPaintingRef.current = true;
             setIsPainting(true);
             paintedCountRef.current = 0;
             setProgress("▶ 正在绘制...");
-
-            // Create the interval
-            intervalRef.current = setInterval(() => {
-                paintTick();
-            }, paintSpeed);
+            intervalRef.current = setInterval(paintTick, paintSpeed);
         }
     }
 
@@ -186,10 +186,10 @@ export default function AutoPaintPanel({ socket, canvasData, canvasWidth, canvas
                 <NumberInput
                     label="间隔 (ms)"
                     value={paintSpeed}
-                    step={50}
-                    min={50}
+                    step={1}
+                    min={1}
                     max={5000}
-                    onChange={(val) => setPaintSpeed(Number(val) || 200)}
+                    onChange={(val) => setPaintSpeed(Number(val) || 10)}
                     disabled={isPainting}
                 />
             </Group>

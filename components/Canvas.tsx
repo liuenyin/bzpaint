@@ -67,7 +67,7 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
           if (data.tokens !== undefined) setUserTokens(data.tokens);
         }
       } catch (_) { /* ignore */ }
-    }, 5000);
+    }, 1000);
     return () => clearInterval(interval);
   }, [loggedIn]);
 
@@ -198,12 +198,7 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
     // The server handles token gating. If we block here, tokens can never
     // recover because refillTokens only runs when the server receives a message.
 
-    // Throttle during drag: only allow 1 draw per 200ms to match server token rate
-    if (isDrag) {
-      const now = Date.now();
-      if (now - lastDrawTime.current < 50) return;
-      lastDrawTime.current = now;
-    }
+    // No throttle — draw as fast as the user can move
 
     const [x, y] = getCanvasCursorCoordinates(e);
 
@@ -336,10 +331,7 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
     if (x < 0 || x >= CANVAS_WIDTH || y < 0 || y >= CANVAS_HEIGHT) return;
     if (!selectedPixelColor) return;
 
-    // Throttle touch moves
-    const now = Date.now();
-    if (e.type === 'touchmove' && now - lastDrawTime.current < 50) return;
-    lastDrawTime.current = now;
+    // No throttle on touch — draw every touch event
 
     plotPixel(x, y, selectedPixelColor);
     socket.emit("message", {
