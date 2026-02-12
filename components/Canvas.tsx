@@ -32,7 +32,7 @@ interface pageProps {
 export default function Canvas({ loggedIn, userData }: pageProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [scale, setScale] = useState(1); // Default scale 1
-  const [canvasData, setCanvasData] = useState<Pixel[]>([]);
+  const canvasDataMapRef = useRef<Map<number, Pixel>>(new Map());
 
   // Resolution Configuration
   const CANVAS_WIDTH = 400;
@@ -129,7 +129,10 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
       loadingOverlayHandler.open();
       const fetchedCanvas = await fetchCanvas();
       if (fetchedCanvas) {
-        setCanvasData(fetchedCanvas);
+        // Build the Map from fetched data
+        const map = new Map<number, Pixel>();
+        fetchedCanvas.forEach((p: Pixel) => map.set(p.position, p));
+        canvasDataMapRef.current = map;
         fillCanvas(fetchedCanvas);
       }
       loadingOverlayHandler.close();
@@ -145,17 +148,8 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
 
       plotPixel(column, row, newPixel.color);
 
-      // Update local state
-      setCanvasData((prev) => {
-        const index = prev.findIndex(p => p.position === newPixel.position);
-        if (index >= 0) {
-          const copy = [...prev];
-          copy[index] = newPixel;
-          return copy;
-        } else {
-          return [...prev, newPixel];
-        }
-      });
+      // O(1) Map update — no array copy, no React re-render
+      canvasDataMapRef.current.set(newPixel.position, newPixel);
     });
 
     socket.on("limitExceeded", (data: { remaining: number }) => {
@@ -178,7 +172,7 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
         }
       }
       window.alert("管理员正在重置画布。");
-      setCanvasData([]);
+      canvasDataMapRef.current = new Map();
     });
 
     return () => {
@@ -277,7 +271,7 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
     }
 
     const pos = y * SERVER_STRIDE + x;
-    const pixelData = canvasData.find(p => p.position === pos);
+    const pixelData = canvasDataMapRef.current.get(pos);
 
     if (!pixelData) {
       if (userData?.type === "Guest" || userData?.type === "Basic") {
@@ -498,7 +492,7 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
               socket={socket}
               tokens={userTokens}
               userTokens={userTokens}
-              canvasData={canvasData}
+              canvasDataMapRef={canvasDataMapRef}
               canvasWidth={CANVAS_WIDTH}
               canvasHeight={CANVAS_HEIGHT}
             />

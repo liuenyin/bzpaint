@@ -1,22 +1,23 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, MutableRefObject } from "react";
 import { Button, FileInput, Image, Stack, Text, Group, NumberInput } from "@mantine/core";
 import { Pixel } from "../common/types";
 
 interface AutoPaintPanelProps {
     socket: any;
     tokens: number;
-    canvasData: Pixel[];
+    canvasDataMapRef: MutableRefObject<Map<number, Pixel>>;
     canvasWidth: number;
     canvasHeight: number;
     userTokens: number;
 }
 
-export default function AutoPaintPanel({ socket, canvasData, canvasWidth, canvasHeight, userTokens }: AutoPaintPanelProps) {
+export default function AutoPaintPanel({ socket, canvasDataMapRef, canvasWidth, canvasHeight, userTokens }: AutoPaintPanelProps) {
     const [file, setFile] = useState<File | null>(null);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
     const [isPainting, setIsPainting] = useState(false);
     const [progress, setProgress] = useState("");
     const [paintSpeed, setPaintSpeed] = useState(10); // ms between draws
+    const [batchSize, setBatchSize] = useState(5); // pixels per tick
 
     // Transformation State
     const [offsetX, setOffsetX] = useState(0);
@@ -24,13 +25,13 @@ export default function AutoPaintPanel({ socket, canvasData, canvasWidth, canvas
     const [scale, setScale] = useState(1.0);
 
     // Refs for values that change frequently — avoids stale closures
-    const canvasDataRef = useRef(canvasData);
     const isPaintingRef = useRef(false);
     const offsetXRef = useRef(offsetX);
     const offsetYRef = useRef(offsetY);
     const scaleRef = useRef(scale);
     const intervalRef = useRef<NodeJS.Timeout | null>(null);
     const paintedCountRef = useRef(0);
+    const scanIndexRef = useRef(0); // Remember where we left off scanning
 
     // CACHED image analysis — only re-analyze when file or scale changes
     const cachedImageRef = useRef<{ data: Uint8ClampedArray; width: number; height: number } | null>(null);
@@ -38,7 +39,6 @@ export default function AutoPaintPanel({ socket, canvasData, canvasWidth, canvas
     const cachedScaleRef = useRef<number>(1);
 
     // Keep refs in sync with state
-    useEffect(() => { canvasDataRef.current = canvasData; }, [canvasData]);
     useEffect(() => { offsetXRef.current = offsetX; }, [offsetX]);
     useEffect(() => { offsetYRef.current = offsetY; }, [offsetY]);
     useEffect(() => { scaleRef.current = scale; }, [scale]);
@@ -61,10 +61,12 @@ export default function AutoPaintPanel({ socket, canvasData, canvasWidth, canvas
             cachedImageRef.current = { data: ctx.getImageData(0, 0, w, h).data, width: w, height: h };
             cachedFileRef.current = file;
             cachedScaleRef.current = s;
+            // Reset scan position when image changes
+            scanIndexRef.current = 0;
         })();
     }, [file, scale]);
 
-    // The core paint tick — uses cached image, no async overhead
+    // The core paint tick — uses cached image + Map lookup + batch + scan memory
     const paintTick = useCallback(() => {
         if (!isPaintingRef.current) return;
         const analysis = cachedImageRef.current;
@@ -74,9 +76,16 @@ export default function AutoPaintPanel({ socket, canvasData, canvasWidth, canvas
         const { data: targetPixels, width: w, height: h } = analysis;
         const ox = offsetXRef.current;
         const oy = offsetYRef.current;
-        const currentCanvas = canvasDataRef.current;
+        const canvasMap = canvasDataMapRef.current;
+        const totalPixels = w * h;
+        const BATCH = batchSize;
+        let sent = 0;
 
-        for (let i = 0; i < w * h; i++) {
+        // Start from where we left off last tick
+        const startIdx = scanIndexRef.current;
+
+        for (let count = 0; count < totalPixels; count++) {
+            const i = (startIdx + count) % totalPixels;
             const imgX = i % w;
             const imgY = Math.floor(i / w);
             const targetX = imgX + ox;
@@ -93,18 +102,29 @@ export default function AutoPaintPanel({ socket, canvasData, canvasWidth, canvas
             const hex = "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
 
             const pos = targetY * SERVER_STRIDE + targetX;
-            const currentP = currentCanvas.find(p => p.position === pos);
+            // O(1) Map lookup instead of O(n) Array.find
+            const currentP = canvasMap.get(pos);
             const currentColor = currentP ? currentP.color : "#FFFFFF";
 
             if (hex.toUpperCase() !== currentColor.toUpperCase()) {
                 socket.emit("message", { position: pos, color: hex });
+                // Optimistic update to prevent re-sending
+                canvasMap.set(pos, {
+                    position: pos,
+                    color: hex,
+                    author: "AutoPaint",
+                    timestamp: new Date()
+                });
                 paintedCountRef.current++;
-                return; // One pixel per tick
+                sent++;
+                // Remember position for next tick (continue from next pixel)
+                scanIndexRef.current = (i + 1) % totalPixels;
+                if (sent >= BATCH) return; // Batch limit reached
             }
         }
 
-        // If we got here, no diff found = done
-        if (isPaintingRef.current) {
+        // If we scanned all pixels and sent nothing (or fewer than BATCH), we're done
+        if (sent === 0 && isPaintingRef.current) {
             isPaintingRef.current = false;
             setIsPainting(false);
             if (intervalRef.current) {
@@ -113,7 +133,7 @@ export default function AutoPaintPanel({ socket, canvasData, canvasWidth, canvas
             }
             setProgress(`✅ 绘制完成！共绘制 ${paintedCountRef.current} 个像素`);
         }
-    }, [socket, canvasWidth, canvasHeight]);
+    }, [socket, canvasWidth, canvasHeight, canvasDataMapRef, batchSize]);
 
     // Start / Stop painting
     function togglePainting() {
@@ -130,6 +150,7 @@ export default function AutoPaintPanel({ socket, canvasData, canvasWidth, canvas
             isPaintingRef.current = true;
             setIsPainting(true);
             paintedCountRef.current = 0;
+            scanIndexRef.current = 0; // Reset scan position on fresh start
             setProgress("▶ 正在绘制...");
             intervalRef.current = setInterval(paintTick, paintSpeed);
         }
@@ -190,6 +211,17 @@ export default function AutoPaintPanel({ socket, canvasData, canvasWidth, canvas
                     min={1}
                     max={5000}
                     onChange={(val) => setPaintSpeed(Number(val) || 10)}
+                    disabled={isPainting}
+                />
+            </Group>
+            <Group grow>
+                <NumberInput
+                    label="每次发送像素数"
+                    value={batchSize}
+                    step={1}
+                    min={1}
+                    max={50}
+                    onChange={(val) => setBatchSize(Number(val) || 5)}
                     disabled={isPainting}
                 />
             </Group>
