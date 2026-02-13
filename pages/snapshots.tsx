@@ -3,12 +3,19 @@ import React, { useEffect, useState } from 'react';
 import { Container, Title, SimpleGrid, Card, Image, Text, Group, Loader, Alert } from '@mantine/core';
 import HeaderSimple from '../components/HeaderSimple';
 
+import { User } from '../common/types';
+
 interface Snapshot {
     id: number;
     created_at: string;
 }
 
-export default function SnapshotsPage() {
+interface SnapshotsPageProps {
+    loggedIn: boolean;
+    userData: User | null;
+}
+
+export default function SnapshotsPage({ loggedIn, userData }: SnapshotsPageProps) {
     const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
@@ -32,7 +39,7 @@ export default function SnapshotsPage() {
 
     return (
         <>
-            <HeaderSimple />
+            <HeaderSimple loggedIn={loggedIn} userType={userData?.type || 'Guest'} />
             <Container size="xl" py="xl">
                 <Title order={2} mb="lg">快照归档 (Snapshots)</Title>
 

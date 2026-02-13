@@ -217,7 +217,7 @@ export default function AutoPaintPanel({ socket, canvasDataMapRef, canvasWidth, 
                 }}
             />
             {previewUrl && (
-                <Image src={previewUrl} w={100} h={100} fit="contain" />
+                <Image src={previewUrl} w={100} h={100} fit="contain" alt="Preview" />
             )}
 
             <Group grow>
