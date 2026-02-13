@@ -188,9 +188,10 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
     if (!loggedIn || userData?.type === 'Guest') {
       return; // Prevent drawing for guests
     }
-    // NOTE: Do NOT check userTokens <= 0 here!
-    // The server handles token gating. If we block here, tokens can never
-    // recover because refillTokens only runs when the server receives a message.
+    // Check tokens BEFORE drawing locally
+    if (userData?.type !== 'Admin' && userTokens <= 0) {
+      return;
+    }
 
     // No throttle — draw as fast as the user can move
 
@@ -324,6 +325,9 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
 
     if (x < 0 || x >= CANVAS_WIDTH || y < 0 || y >= CANVAS_HEIGHT) return;
     if (!selectedPixelColor) return;
+
+    // Check tokens
+    if (userData?.type !== 'Admin' && userTokens <= 0) return;
 
     // No throttle on touch — draw every touch event
 

@@ -15,6 +15,6 @@ function hexToRgb(hex) {
  * ! Do not change this value unless you know what you are doing.
  * ! canvasSize on frontend must be updated manually.
  */
-const canvasSize = 100;
+const canvasSize = 1000;
 
 module.exports = { colorValidator, canvasSize, hexToRgb };

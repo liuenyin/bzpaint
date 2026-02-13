@@ -10,6 +10,7 @@ const { RateLimiterMemory } = require("rate-limiter-flexible");
 const session = require("express-session");
 const next = require("next");
 const { colorValidator } = require("./server/utils/common");
+const canvasState = require("./server/utils/canvasState");
 
 const dev = process.env.NODE_ENV !== "production";
 const nextApp = next({ dev });
@@ -22,7 +23,10 @@ const supabase = require("./server/db");
 const indexRouter = require("./server/routes/index");
 const authRouter = require("./server/routes/auth");
 
-nextApp.prepare().then(() => {
+nextApp.prepare().then(async () => {
+    // Initialize Canvas State
+    await canvasState.init();
+
     const app = express();
     const server = http.createServer(app);
 
@@ -38,6 +42,7 @@ nextApp.prepare().then(() => {
     app.set("port", port);
 
     // Middlewares
+    app.use(require("compression")()); // Enable Gzip
     app.use(logger("dev"));
     app.use(express.json());
     app.use(express.urlencoded({ extended: false }));
@@ -175,6 +180,10 @@ nextApp.prepare().then(() => {
                 if (existingIndex >= 0) canvasBuffer[existingIndex] = { ...updatedPixel, author: connectedUser.id };
                 else canvasBuffer.push({ ...updatedPixel, author: connectedUser.id });
                 if (canvasBuffer.length >= databaseRefreshRate) uploadCanvasBuffer();
+
+                // Update Memory State
+                canvasState.updatePixel(updatedPixel.position, updatedPixel.color, connectedUser.username || "Admin");
+
                 return;
             }
 
@@ -196,6 +205,9 @@ nextApp.prepare().then(() => {
             else canvasBuffer.push({ ...updatedPixel, author: connectedUser.id });
 
             if (canvasBuffer.length >= databaseRefreshRate) uploadCanvasBuffer();
+
+            // Update Memory State
+            canvasState.updatePixel(updatedPixel.position, updatedPixel.color, connectedUser.username || "User");
         });
 
         socket.on("batchMessage", async (data) => {
@@ -249,6 +261,11 @@ nextApp.prepare().then(() => {
             });
 
             if (canvasBuffer.length >= databaseRefreshRate) uploadCanvasBuffer();
+
+            // Update Memory State (Batch)
+            validPixels.forEach(p => {
+                canvasState.updatePixel(p.position, p.color, connectedUser.username || "User");
+            });
         });
 
         socket.on("disconnect", () => {
@@ -262,6 +279,11 @@ nextApp.prepare().then(() => {
                 io.emit("resetCanvasResponse");
                 // DB Clear?
                 await supabase.from('pixels').delete().neq('id', -1); // Delete all
+
+                // Memory Clear?
+                // Re-init or clear buffer
+                canvasState.colorBuffer.fill(0xFFFFFFFF);
+                canvasState.authorMap.clear();
             }
         });
     });
@@ -292,6 +314,39 @@ nextApp.prepare().then(() => {
         res.json({ message: data?.value || "Welcome!" });
     });
 
+    // Helper to parse image data
+    function parseSnapshotBuffer(data) {
+        if (!data || !data.image_data) return null;
+
+        let buf;
+        if (Buffer.isBuffer(data.image_data)) {
+            buf = data.image_data;
+        } else if (data.image_data && data.image_data.type === 'Buffer' && Array.isArray(data.image_data.data)) {
+            buf = Buffer.from(data.image_data.data);
+        } else if (typeof data.image_data === 'string') {
+            const hex = data.image_data.replace(/^\\x/, '');
+            buf = Buffer.from(hex, 'hex');
+        } else {
+            buf = Buffer.from(data.image_data);
+        }
+
+        // Check if Buffer contains JSON (e.g. {"type":"Buffer"...) due to double encoding
+        if (buf.length > 0 && buf[0] === 123) { // '{' is 123
+            try {
+                const str = buf.toString('utf8');
+                if (str.startsWith('{"type":"Buffer"')) {
+                    const json = JSON.parse(str);
+                    if (json && json.type === 'Buffer' && Array.isArray(json.data)) {
+                        return Buffer.from(json.data);
+                    }
+                }
+            } catch (e) {
+                // Not JSON, ignore
+            }
+        }
+        return buf;
+    }
+
     // Get Latest Snapshot as PNG image
     app.get('/api/snapshot/latest', async (req, res) => {
         const { data, error } = await supabase
@@ -303,21 +358,8 @@ nextApp.prepare().then(() => {
 
         if (error || !data) return res.status(404).send('No snapshot');
 
-        // Supabase may return bytea as different formats depending on version
-        let buf;
-        if (Buffer.isBuffer(data.image_data)) {
-            buf = data.image_data;
-        } else if (data.image_data && data.image_data.type === 'Buffer' && Array.isArray(data.image_data.data)) {
-            // JSON serialized Buffer: { type: 'Buffer', data: [137, 80, 78, ...] }
-            buf = Buffer.from(data.image_data.data);
-        } else if (typeof data.image_data === 'string') {
-            // Hex string like '\\x89504e47...'
-            const hex = data.image_data.replace(/^\\x/, '');
-            buf = Buffer.from(hex, 'hex');
-        } else {
-            // Last resort: try direct conversion
-            buf = Buffer.from(data.image_data);
-        }
+        const buf = parseSnapshotBuffer(data);
+        if (!buf) return res.status(500).send('Invalid image data');
 
         res.setHeader('Content-Type', 'image/png');
         res.setHeader('Cache-Control', 'no-cache');
@@ -344,18 +386,11 @@ nextApp.prepare().then(() => {
             .single();
         if (error || !data) return res.status(404).send('Not found');
 
-        let buf;
-        if (Buffer.isBuffer(data.image_data)) {
-            buf = data.image_data;
-        } else if (data.image_data && data.image_data.type === 'Buffer' && Array.isArray(data.image_data.data)) {
-            buf = Buffer.from(data.image_data.data);
-        } else if (typeof data.image_data === 'string') {
-            const hex = data.image_data.replace(/^\\x/, '');
-            buf = Buffer.from(hex, 'hex');
-        } else {
-            buf = Buffer.from(data.image_data);
-        }
+        const buf = parseSnapshotBuffer(data);
+        if (!buf) return res.status(500).send('Invalid image data');
+
         res.setHeader('Content-Type', 'image/png');
+        res.setHeader('Cache-Control', 'public, max-age=31536000'); // Immutable
         res.send(buf);
     });
 
