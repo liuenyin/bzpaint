@@ -49,6 +49,7 @@ export interface ServerToClientEvents {
  */
 export interface ClientToServerEvents {
   message: (pixel: minimalPixel) => void; // send minimum info to server about pixel to be updated
+  batchMessage: (data: { pixels: minimalPixel[] }) => void; // batch pixel updates for AutoPaint
   resetCanvas: () => void; // request server to reset canvas. server may refuse request.
 }
 

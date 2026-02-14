@@ -2,7 +2,7 @@ import "@mantine/core/styles.css";
 import Head from "next/head";
 import { MantineProvider } from "@mantine/core";
 import { theme } from "../theme";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { User, loginDetails } from "../common/types";
 import { API_URL } from "../common/constants";
 import { useRouter } from "next/router";
@@ -31,7 +31,6 @@ export default function App({ Component, pageProps }: AppProps) {
         },
         credentials: "include", // ! important
       });
-      console.log(response);
 
       const json = await response.json();
 
@@ -39,14 +38,24 @@ export default function App({ Component, pageProps }: AppProps) {
         return json;
       }
 
-      // error
-      console.log(json);
-      window.alert(json.error);
+      // Not logged in or error — silently ignore on auto-restore
+      return null;
     } catch (error) {
-      window.alert(error);
-      console.log(error);
+      console.error("getUserData error:", error);
+      return null;
     }
   }
+
+  // Auto-recover login state on page load/refresh
+  useEffect(() => {
+    (async () => {
+      const data = await getUserData();
+      if (data) {
+        setLoggedIn(true);
+        setUserData(data);
+      }
+    })();
+  }, []);
 
   async function loginHandler(loginDetails: loginDetails) {
     try {

@@ -50,16 +50,6 @@ async function createAndSaveSnapshot() {
         const { error: insertError } = await supabase
             .from('snapshots')
             .insert({
-                image_data: 'x' + buffer.toString('hex'), // 'x' or '\\x'? Supabase might need raw hex or valid bytea string
-                // Postgres hex format usually starts with \x
-                // But if we pass string, supabase might escape/quote it. 
-                // Let's try passing the buffer again but maybe we expect the READER to just handle the JSON?
-                // Actually, if we use the reader fix, we are good.
-                // But for correctness, let's try to store it cleaner if possible.
-                // Let's stick to buffer for now but since we fixed the reader, even the "JSON in Hex" will be read correctly.
-                // To avoid "JSON in Hex", we can try passing the Hex string directly if supabase supports it.
-                // Safest bet: Stick to what we have (Buffer) and let the Reader handle the mess, OR try to fix the Writer.
-                // Let's try convert to Hex String which is standard for Bytea.
                 image_data: '\\x' + buffer.toString('hex'),
                 created_at: new Date()
             });

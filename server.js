@@ -120,7 +120,7 @@ nextApp.prepare().then(async () => {
 
     // Socket.io Logic
     let onlineUsers = [];
-    const canvasBuffer = [];
+    const canvasBufferMap = new Map(); // position -> pixel data (O(1) lookup)
     const databaseRefreshRate = 10;
 
     // On User Change
@@ -142,16 +142,13 @@ nextApp.prepare().then(async () => {
 
 
     async function uploadCanvasBuffer() {
-        if (canvasBuffer.length > 0) {
-            const bufferCopy = [...canvasBuffer];
-            canvasBuffer.length = 0;
+        if (canvasBufferMap.size > 0) {
+            const bufferCopy = Array.from(canvasBufferMap.values());
+            canvasBufferMap.clear();
             const { error } = await supabase.from('pixels').upsert(bufferCopy.map(p => ({
                 x: p.position % 1000,
                 y: Math.floor(p.position / 1000),
-                // id: p.position, // Removed: No id column
                 color: p.color,
-                // Check if author is a valid UUID (simple regex or length check)
-                // UUID is 36 chars. Guest ID is usually 'guest-'...
                 last_user: (p.author && p.author.length === 36 && p.author.indexOf('guest') === -1) ? p.author : null,
                 updated_at: new Date()
             })), { onConflict: 'x, y' }); // Conflict on compound key (x, y)
@@ -163,8 +160,8 @@ nextApp.prepare().then(async () => {
         const connectedUser = socket.request.user;
         onOnlineUserChange(connectedUser, true);
 
-        if (canvasBuffer.length > 0) {
-            canvasBuffer.forEach(p => socket.emit("messageResponse", p));
+        if (canvasBufferMap.size > 0) {
+            canvasBufferMap.forEach(p => socket.emit("messageResponse", p));
         }
 
         socket.on("message", async (updatedPixel) => {
@@ -176,10 +173,8 @@ nextApp.prepare().then(async () => {
                 io.emit("messageResponse", detailedPixel);
                 socket.emit("tokenUpdate", { tokens: 9999 });
 
-                const existingIndex = canvasBuffer.findIndex(p => p.position === updatedPixel.position);
-                if (existingIndex >= 0) canvasBuffer[existingIndex] = { ...updatedPixel, author: connectedUser.id };
-                else canvasBuffer.push({ ...updatedPixel, author: connectedUser.id });
-                if (canvasBuffer.length >= databaseRefreshRate) uploadCanvasBuffer();
+                canvasBufferMap.set(updatedPixel.position, { ...updatedPixel, author: connectedUser.id });
+                if (canvasBufferMap.size >= databaseRefreshRate) uploadCanvasBuffer();
 
                 // Update Memory State
                 canvasState.updatePixel(updatedPixel.position, updatedPixel.color, connectedUser.username || "Admin");
@@ -200,11 +195,9 @@ nextApp.prepare().then(async () => {
             io.emit("messageResponse", detailedPixel);
             socket.emit("tokenUpdate", { tokens: result.remaining });
 
-            const existingIndex = canvasBuffer.findIndex(p => p.position === updatedPixel.position);
-            if (existingIndex >= 0) canvasBuffer[existingIndex] = { ...updatedPixel, author: connectedUser.id };
-            else canvasBuffer.push({ ...updatedPixel, author: connectedUser.id });
+            canvasBufferMap.set(updatedPixel.position, { ...updatedPixel, author: connectedUser.id });
 
-            if (canvasBuffer.length >= databaseRefreshRate) uploadCanvasBuffer();
+            if (canvasBufferMap.size >= databaseRefreshRate) uploadCanvasBuffer();
 
             // Update Memory State
             canvasState.updatePixel(updatedPixel.position, updatedPixel.color, connectedUser.username || "User");
@@ -221,15 +214,14 @@ nextApp.prepare().then(async () => {
             // Admin bypass
             if (connectedUser.type === 'Admin') {
                 socket.emit("tokenUpdate", { tokens: 9999 });
-                validPixels.forEach(p => {
+                const detailedPixels = validPixels.map(p => {
                     const detailedPixel = { ...p, author: connectedUser.username || "Admin", timestamp: new Date() };
-                    io.emit("messageResponse", detailedPixel);
-
-                    const existingIndex = canvasBuffer.findIndex(ex => ex.position === p.position);
-                    if (existingIndex >= 0) canvasBuffer[existingIndex] = { ...p, author: connectedUser.id };
-                    else canvasBuffer.push({ ...p, author: connectedUser.id });
+                    canvasBufferMap.set(p.position, { ...p, author: connectedUser.id });
+                    return detailedPixel;
                 });
-                if (canvasBuffer.length >= databaseRefreshRate) uploadCanvasBuffer();
+                // Broadcast batch as individual events (clients expect messageResponse)
+                detailedPixels.forEach(dp => io.emit("messageResponse", dp));
+                if (canvasBufferMap.size >= databaseRefreshRate) uploadCanvasBuffer();
                 return;
             }
 
@@ -255,12 +247,10 @@ nextApp.prepare().then(async () => {
                 const detailedPixel = { ...p, author: connectedUser.username || "User", timestamp: new Date() };
                 io.emit("messageResponse", detailedPixel);
 
-                const existingIndex = canvasBuffer.findIndex(ex => ex.position === p.position);
-                if (existingIndex >= 0) canvasBuffer[existingIndex] = { ...p, author: connectedUser.id };
-                else canvasBuffer.push({ ...p, author: connectedUser.id });
+                canvasBufferMap.set(p.position, { ...p, author: connectedUser.id });
             });
 
-            if (canvasBuffer.length >= databaseRefreshRate) uploadCanvasBuffer();
+            if (canvasBufferMap.size >= databaseRefreshRate) uploadCanvasBuffer();
 
             // Update Memory State (Batch)
             validPixels.forEach(p => {
@@ -277,8 +267,8 @@ nextApp.prepare().then(async () => {
         socket.on("resetCanvas", async () => {
             if (connectedUser.type === 'Admin') {
                 io.emit("resetCanvasResponse");
-                // DB Clear?
-                await supabase.from('pixels').delete().neq('id', -1); // Delete all
+                // DB Clear — pixels PK is (x, y), no 'id' column
+                await supabase.from('pixels').delete().gte('x', 0);
 
                 // Memory Clear?
                 // Re-init or clear buffer

@@ -67,7 +67,7 @@ export default function Canvas({ loggedIn, userData }: pageProps) {
           if (data.tokens !== undefined) setUserTokens(data.tokens);
         }
       } catch (_) { /* ignore */ }
-    }, 1000);
+    }, 5000); // 5s — each poll triggers a DB RPC, keep low to reduce load
     return () => clearInterval(interval);
   }, [loggedIn]);
 

@@ -28,11 +28,11 @@ begin
   v_last_update := coalesce(v_profile.last_token_update, v_now);
   -- Calculate time passed in milliseconds
   v_diff_ms := extract(epoch from (v_now - v_last_update)) * 1000;
-  v_ticks := floor(v_diff_ms / 500); -- 500ms rate
+  v_ticks := floor(v_diff_ms / 1000); -- 1000ms rate (1s per token)
   
-  -- Update Timestamp Logic (consume full 500ms chunks)
+  -- Update Timestamp Logic (consume full 1000ms chunks)
   if v_ticks > 0 then
-      v_remainder_ms := v_diff_ms % 500;
+      v_remainder_ms := v_diff_ms % 1000;
       v_new_update := v_now - (v_remainder_ms || ' milliseconds')::interval;
   else
       v_new_update := v_last_update;

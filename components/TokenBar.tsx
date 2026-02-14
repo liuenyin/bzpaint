@@ -14,7 +14,7 @@ export default function TokenBar({ tokens, maxTokens }: TokenBarProps) {
         const startTime = Date.now();
         const interval = setInterval(() => {
             const elapsed = Date.now() - startTime;
-            const p = (elapsed % 500) / 500 * 100;
+            const p = (elapsed % 1000) / 1000 * 100;
             setProgress(p);
         }, 100);
         return () => clearInterval(interval);

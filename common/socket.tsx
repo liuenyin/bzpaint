@@ -9,6 +9,6 @@ export const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(
     reconnectionDelayMax: 10000,
     autoConnect: false,
     withCredentials: true,
-    transports: ["websocket", "polling", "flashsocket"], // https://stackoverflow.com/a/65566581/17627866
+    transports: ["websocket", "polling"],
   }
 );
